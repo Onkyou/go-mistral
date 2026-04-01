@@ -11,79 +11,115 @@ import (
 // Mistral API docs: https://docs.mistral.ai/api/endpoint/chat
 type ChatService service
 
-// ChatMessage represents a single message in the conversation.
-type ChatMessage struct {
-	Role    Role    `json:"role"`
-	Content string  `json:"content"`
-	Name    *string `json:"name,omitempty"`
+type ResponseFormatType string
 
-	// Tool related fields
-	ToolCallID *string    `json:"tool_call_id,omitempty"`
-	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
-}
-
-// ToolCall represents a tool call initiated by the model.
-type ToolCall struct {
-	ID       string       `json:"id"`
-	Type     string       `json:"type"`
-	Function ToolFunction `json:"function"`
-}
-
-// ToolFunction represents a function call.
-type ToolFunction struct {
-	Name      string `json:"name"`
-	Arguments string `json:"arguments"`
-}
+const (
+	ResponseFormatTypeText       ResponseFormatType = "text"
+	ResponseFormatTypeJsonObject ResponseFormatType = "json_object"
+	ResponseFormatTypeJsonSchema ResponseFormatType = "json_schema"
+)
 
 // ResponseFormat represents the format of the response.
 type ResponseFormat struct {
-	Type string `json:"type"`
+	Type       ResponseFormatType `json:"type"`
+	JsonSchema *JsonSchema        `json:"json_schema,omitempty"`
+}
+
+type JsonSchema struct {
+	Name             string         `json:"name"`
+	Description      string         `json:"description,omitempty"`
+	SchemaDefinition map[string]any `json:"schema_definition"`
+	Strict           bool           `json:"strict"`
 }
 
 // ChatCompletionRequest represents the request payload for the chat completion API.
 type ChatCompletionRequest struct {
-	Model          Model           `json:"model"`
-	Messages       []ChatMessage   `json:"messages"`
-	Temperature    *float64        `json:"temperature,omitempty"`
-	TopP           *float64        `json:"top_p,omitempty"`
-	MaxTokens      *int            `json:"max_tokens,omitempty"`
-	Stream         *bool           `json:"stream,omitempty"`
-	SafePrompt     *bool           `json:"safe_prompt,omitempty"`
-	RandomSeed     *int            `json:"random_seed,omitempty"`
-	Tools          []Tool          `json:"tools,omitempty"`
-	ToolChoice     any             `json:"tool_choice,omitempty"`
+	// The frequency_penalty penalizes the repetition of words based on their frequency in the generated text. A higher frequency penalty discourages the model from repeating words that have already appeared frequently in the output, promoting diversity and reducing repetition.
+	FrequencyPenalty float64 `json:"frequency_penalty"`
+
+	// Guardrails are used to control the output of the model.
+	Guardrails *GuardrailConfig `json:"guardrail,omitempty"`
+
+	// The maximum number of tokens to generate in the completion. The token count of your prompt plus max_tokens cannot exceed the model's context length.
+	MaxTokens *int `json:"max_tokens,omitempty"`
+
+	// The prompt(s) to generate completions for, encoded as a list of dict with role and content.
+	Messages []ChatMessage `json:"messages"`
+
+	// A dictionary of metadata to attach to the request.
+	Metadata map[string]string `json:"metadata,omitempty"`
+
+	// ID of the model to use.
+	Model Model `json:"model"`
+
+	// Number of completions to return for each request, input tokens are only billed once.
+	N *int `json:"n,omitempty"`
+
+	// Whether to enable parallel function calling during tool use, when enabled the model can call multiple tools in parallel.
+	ParallelToolCalls *bool `json:"parallel_tool_calls,omitempty"`
+
+	// The presence_penalty determines how much the model penalizes the repetition of words or phrases. A higher presence penalty encourages the model to use a wider variety of words and phrases, making the output more diverse and creative.
+	PresencePenalty float64 `json:"presence_penalty"`
+
+	// The seed to use for random sampling. If set, different calls will generate deterministic results.
+	RandomSeed *int `json:"random_seed,omitempty"`
+
+	// Controls the reasoning effort level for reasoning models. "high" enables comprehensive reasoning traces, "none" disables reasoning effort.
+	ReasoningEffort *ReasoningEffort `json:"reasoning_effort,omitempty"`
+
+	// Specify the format that the model must output. By default it will use \{ "type": "text" \}. Setting to \{ "type": "json_object" \} enables JSON mode, which guarantees the message the model generates is in JSON. When using JSON mode you MUST also instruct the model to produce JSON yourself with a system or a user message. Setting to \{ "type": "json_schema" \} enables JSON schema mode, which guarantees the message the model generates is in JSON and follows the schema you provide.
 	ResponseFormat *ResponseFormat `json:"response_format,omitempty"`
-}
 
-// Tool represents a tool that the model can call.
-type Tool struct {
-	Type     string         `json:"type"`
-	Function ToolDefinition `json:"function"`
-}
+	// What sampling temperature to use, we recommend between 0.0 and 0.7. Higher values like 0.7 will make the output more random, while lower values like 0.2 will make it more focused and deterministic. We generally recommend altering this or top_p but not both. The default value varies depending on the model you are targeting. Call the /models endpoint to retrieve the appropriate value.
+	Temperature *float64 `json:"temperature,omitempty"`
 
-// ToolDefinition represents a function definition.
-type ToolDefinition struct {
-	Name        string         `json:"name"`
-	Description string         `json:"description,omitempty"`
-	Parameters  map[string]any `json:"parameters"`
+	// Nucleus sampling, where the model considers the results of the tokens with top_p probability mass. So 0.1 means only the tokens comprising the top 10% probability mass are considered. We generally recommend altering this or temperature but not both.
+	TopP *float64 `json:"top_p,omitempty"`
+
+	// Whether to stream back partial progress. If set, tokens will be sent as data-only server-side events as they become available, with the stream terminated by a data: [DONE] message. Otherwise, the server will hold the request open until the timeout or until completion, with the response containing the full result as JSON.
+	Stream bool `json:"stream,omitempty"`
+
+	// Whether to inject a safety prompt before all conversations.
+	SafePrompt bool `json:"safe_prompt"`
+
+	// Stop generation if this token is detected. Or if one of these tokens is detected when providing an array
+	Stop []string `json:"stop,omitempty"`
+
+	// Controls which (if any) tool is called by the model. none means the model will not call any tool and instead generates a message. auto means the model can pick between generating a message or calling one or more tools. any or required means the model must call one or more tools. Specifying a particular tool forces the model to call that tool.
+	ToolChoice ToolChoice `json:"tool_choice,omitempty"`
+
+	// A list of tools the model may call.
+	Tools []Tool `json:"tools,omitempty"`
 }
 
 // ChatCompletionResponse wraps the chat completion response.
 type ChatCompletionResponse struct {
-	ID      string       `json:"id"`
-	Object  string       `json:"object"`
-	Created int64        `json:"created"`
-	Model   Model        `json:"model"`
-	Choices []ChatChoice `json:"choices"`
-	Usage   UsageInfo    `json:"usage"`
+	Choices []ChatCompletionChoice `json:"choices"`
+	Created int                    `json:"created"`
+	ID      string                 `json:"id"`
+	Model   Model                  `json:"model"`
+	Object  string                 `json:"object"`
+	Usage   UsageInfo              `json:"usage"`
 }
 
-// ChatChoice represents a single completion choice.
-type ChatChoice struct {
-	Index        int          `json:"index"`
-	Message      *ChatMessage `json:"message,omitempty"`
+type FinishReason string
+
+const (
+	FinishReasonStop        FinishReason = "stop"
+	FinishReasonLength      FinishReason = "length"
+	FinishReasonModelLength FinishReason = "model_length"
+	FinishReasonError       FinishReason = "error"
+	FinishReasonToolCalls   FinishReason = "tool_calls"
+)
+
+// ChatCompletionChoice represents a single completion choice.
+type ChatCompletionChoice struct {
+	Index   int          `json:"index"`
+	Message *ChatMessage `json:"message,omitempty"`
+
+	// Delta can be used by consumers to get the partial results in a streaming completion.
 	Delta        *ChatMessage `json:"delta,omitempty"`
-	FinishReason string       `json:"finish_reason"`
+	FinishReason FinishReason `json:"finish_reason"`
 }
 
 // ChatCompletionRequestOption is a functional option for ChatCompletionRequest.
@@ -110,17 +146,10 @@ func WithTopP(p float64) ChatCompletionRequestOption {
 	}
 }
 
-// WithStream sets the stream flag for the request.
-func WithStream(s bool) ChatCompletionRequestOption {
-	return func(r *ChatCompletionRequest) {
-		r.Stream = new(s)
-	}
-}
-
 // WithSafePrompt sets the safe_prompt flag for the request.
 func WithSafePrompt(s bool) ChatCompletionRequestOption {
 	return func(r *ChatCompletionRequest) {
-		r.SafePrompt = new(s)
+		r.SafePrompt = s
 	}
 }
 
@@ -139,7 +168,7 @@ func WithTools(tools []Tool) ChatCompletionRequestOption {
 }
 
 // WithToolChoice sets the tool_choice for the request.
-func WithToolChoice(choice any) ChatCompletionRequestOption {
+func WithToolChoice(choice ToolChoice) ChatCompletionRequestOption {
 	return func(r *ChatCompletionRequest) {
 		r.ToolChoice = choice
 	}
@@ -183,7 +212,7 @@ func (svc *ChatService) Stream(ctx context.Context, model Model, messages []Chat
 	req := &ChatCompletionRequest{
 		Model:    model,
 		Messages: messages,
-		Stream:   new(true),
+		Stream:   true,
 	}
 	for _, opt := range opts {
 		opt(req)

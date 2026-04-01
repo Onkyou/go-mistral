@@ -248,10 +248,15 @@ type APIError struct {
 	Type           string  `json:"type"`
 	Param          *string `json:"param"`
 	Code           *string `json:"code"`
+	RawBody        []byte  `json:"-"`
 }
 
 func (e *APIError) Error() string {
-	return fmt.Sprintf("mistral: API error (status=%d): %s", e.HTTPStatusCode, e.Message)
+	msg := e.Message
+	if msg == "" && len(e.RawBody) > 0 {
+		msg = string(e.RawBody)
+	}
+	return fmt.Sprintf("mistral: API error (status=%d): %s", e.HTTPStatusCode, msg)
 }
 
 // CheckResponse checks the API response for errors, and returns them if present.
@@ -263,6 +268,7 @@ func CheckResponse(r *http.Response) error {
 	apiErr := &APIError{HTTPStatusCode: r.StatusCode}
 	data, err := io.ReadAll(r.Body)
 	if err == nil && len(data) > 0 {
+		apiErr.RawBody = data
 		json.Unmarshal(data, apiErr)
 	}
 

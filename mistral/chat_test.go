@@ -27,7 +27,7 @@ func TestChatService_Complete(t *testing.T) {
 			},
 			mockResponse: &ChatCompletionResponse{
 				ID: "chat-123",
-				Choices: []ChatChoice{
+				Choices: []ChatCompletionChoice{
 					{Message: &ChatMessage{Role: RoleAssistant, Content: "Hello!"}},
 				},
 			},
@@ -43,12 +43,69 @@ func TestChatService_Complete(t *testing.T) {
 			opts: []ChatCompletionRequestOption{WithTemperature(0.7)},
 			mockResponse: &ChatCompletionResponse{
 				ID: "chat-456",
-				Choices: []ChatChoice{
+				Choices: []ChatCompletionChoice{
 					{Message: &ChatMessage{Role: RoleAssistant, Content: "Hi there!"}},
 				},
 			},
 			mockStatusCode: http.StatusOK,
 			wantErr:        false,
+		},
+		{
+			name:  "with guardrails",
+			model: ModelMistralLargeLatest,
+			messages: []ChatMessage{
+				{Role: RoleUser, Content: "Hi"},
+			},
+			opts: []ChatCompletionRequestOption{
+				func(r *ChatCompletionRequest) {
+					r.Guardrails = &GuardrailConfig{
+						BlockOnError: true,
+						Moderation: &ModerationConfig{
+							Action: ModerationConfigActionBlock,
+							ModelName: ModelMistralModeration2603,
+							CustomCategoryThresholds: &ModerationCategoryThresholds{
+								Criminal: 0.1,
+							},
+						},
+					}
+				},
+			},
+			mockResponse: &ChatCompletionResponse{ID: "guardrail-123"},
+			wantErr:      false,
+		},
+		{
+			name:  "with reasoning effort",
+			model: ModelMistralLargeLatest,
+			messages: []ChatMessage{
+				{Role: RoleUser, Content: "Solve 1+1"},
+			},
+			opts: []ChatCompletionRequestOption{
+				func(r *ChatCompletionRequest) {
+					r.ReasoningEffort = new(ReasoningEffort)
+					*r.ReasoningEffort = ReasoningEffortHigh
+				},
+			},
+			mockResponse: &ChatCompletionResponse{ID: "reasoning-123"},
+			wantErr:      false,
+		},
+		{
+			name:  "with json schema response format",
+			model: ModelMistralLargeLatest,
+			messages: []ChatMessage{
+				{Role: RoleUser, Content: "output json"},
+			},
+			opts: []ChatCompletionRequestOption{
+				WithResponseFormat(ResponseFormat{
+					Type: ResponseFormatTypeJsonSchema,
+					JsonSchema: &JsonSchema{
+						Name: "output",
+						SchemaDefinition: map[string]any{"type": "object"},
+						Strict: true,
+					},
+				}),
+			},
+			mockResponse: &ChatCompletionResponse{ID: "format-123"},
+			wantErr:      false,
 		},
 	}
 
@@ -68,7 +125,19 @@ func TestChatService_Complete(t *testing.T) {
 					t.Errorf("expected model %s, got %s", tt.model, req.Model)
 				}
 
-				w.WriteHeader(tt.mockStatusCode)
+				// Basic validation that options were applied
+				if tt.name == "with reasoning effort" && (req.ReasoningEffort == nil || *req.ReasoningEffort != ReasoningEffortHigh) {
+					t.Errorf("expected reasoning effort %s, got %v", ReasoningEffortHigh, req.ReasoningEffort)
+				}
+				if tt.name == "with guardrails" && req.Guardrails == nil {
+					t.Errorf("expected guardrails to be set")
+				}
+
+				statusCode := tt.mockStatusCode
+				if statusCode == 0 {
+					statusCode = http.StatusOK
+				}
+				w.WriteHeader(statusCode)
 				if tt.mockResponse != nil {
 					json.NewEncoder(w).Encode(tt.mockResponse)
 				}
@@ -87,6 +156,8 @@ func TestChatService_Complete(t *testing.T) {
 	}
 }
 
+
+
 func TestChatService_Stream(t *testing.T) {
 	tests := []struct {
 		name           string
@@ -104,9 +175,9 @@ func TestChatService_Stream(t *testing.T) {
 				{Role: RoleUser, Content: "Hi"},
 			},
 			mockChunks: []ChatCompletionResponse{
-				{ID: "1", Choices: []ChatChoice{{Delta: &ChatMessage{Content: "Hello"}}}},
-				{ID: "2", Choices: []ChatChoice{{Delta: &ChatMessage{Content: " "}}}},
-				{ID: "3", Choices: []ChatChoice{{Delta: &ChatMessage{Content: "World"}}}},
+				{ID: "1", Choices: []ChatCompletionChoice{{Delta: &ChatMessage{Content: "Hello"}}}},
+				{ID: "2", Choices: []ChatCompletionChoice{{Delta: &ChatMessage{Content: " "}}}},
+				{ID: "3", Choices: []ChatCompletionChoice{{Delta: &ChatMessage{Content: "World"}}}},
 			},
 			mockStatusCode: http.StatusOK,
 			wantContent:    "Hello World",
