@@ -35,12 +35,14 @@ type Function struct {
 
 // NewFunctionTool creates a new function tool.
 func NewFunctionTool(name, description string, parameters any) Tool {
+
+	schema, _ := StructToSchema(parameters)
 	return Tool{
 		Type: ToolTypeFunction,
 		Function: Function{
 			Name:        name,
 			Description: description,
-			Parameters:  parameters,
+			Parameters:  schema,
 		},
 	}
 }
@@ -53,7 +55,7 @@ func StructToSchema(v any) (map[string]any, error) {
 		t = t.Elem()
 	}
 	if t.Kind() != reflect.Struct {
-		return nil, nil // or error? usually we expect a struct
+		return nil, nil
 	}
 
 	properties := make(map[string]any)

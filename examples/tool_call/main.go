@@ -6,7 +6,6 @@ import (
 	"log"
 	"math/rand"
 	"os"
-	"time"
 
 	"github.com/onkyou/go-mistral/mistral"
 )
@@ -30,15 +29,12 @@ func main() {
 		Max int `json:"max" mistral:"The maximum value (inclusive)."`
 	}
 
-	// Generate JSON Schema from the struct
-	schema, _ := mistral.StructToSchema(RandomNumberArgs{})
-
-	// Define the tool (function)
+	// Define the list of tools available to the model
 	tools := []mistral.Tool{
 		mistral.NewFunctionTool(
 			"get_random_number",
 			"Generates a random number between a minimum and maximum value.",
-			schema,
+			RandomNumberArgs{},
 		),
 	}
 
@@ -76,7 +72,6 @@ func main() {
 				}
 
 				// Execute local function
-				rand.New(rand.NewSource(time.Now().UnixNano()))
 				result := rand.Intn(args.Max-args.Min+1) + args.Min
 				fmt.Printf("Local function result: %d\n", result)
 

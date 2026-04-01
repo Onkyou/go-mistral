@@ -61,7 +61,7 @@ func TestChatService_Complete(t *testing.T) {
 					r.Guardrails = &GuardrailConfig{
 						BlockOnError: true,
 						Moderation: &ModerationConfig{
-							Action: ModerationConfigActionBlock,
+							Action:    ModerationConfigActionBlock,
 							ModelName: ModelMistralModeration2603,
 							CustomCategoryThresholds: &ModerationCategoryThresholds{
 								Criminal: 0.1,
@@ -98,9 +98,9 @@ func TestChatService_Complete(t *testing.T) {
 				WithResponseFormat(ResponseFormat{
 					Type: ResponseFormatTypeJsonSchema,
 					JsonSchema: &JsonSchema{
-						Name: "output",
+						Name:             "output",
 						SchemaDefinition: map[string]any{"type": "object"},
-						Strict: true,
+						Strict:           true,
 					},
 				}),
 			},
@@ -155,8 +155,6 @@ func TestChatService_Complete(t *testing.T) {
 		})
 	}
 }
-
-
 
 func TestChatService_Stream(t *testing.T) {
 	tests := []struct {
