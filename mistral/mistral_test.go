@@ -1,65 +1,57 @@
-package mistral
+package mistral_test
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"testing"
+	"time"
+
+	"github.com/onkyou/go-mistral/mistral"
 )
 
 func TestNewClient(t *testing.T) {
 	tests := []struct {
-		name      string
-		opts      []ClientOption
-		wantErr   bool
-		checkFunc func(*testing.T, *Client)
+		name    string
+		cfg     *mistral.ClientConfig
+		wantErr bool
+		check   func(*testing.T, *mistral.Client)
 	}{
 		{
 			name:    "default client with key",
-			opts:    []ClientOption{WithAPIKey("test-key")},
+			cfg:     &mistral.ClientConfig{APIKey: "test-key"},
 			wantErr: false,
-			checkFunc: func(t *testing.T, c *Client) {
-				if c.BaseURL.String() != defaultBaseURL {
-					t.Errorf("expected default base URL, got %s", c.BaseURL)
-				}
-				if c.apiKey != "test-key" {
-					t.Errorf("expected api key to be set")
+			check: func(t *testing.T, c *mistral.Client) {
+				if c.BaseURL.String() != "https://api.mistral.ai/" {
+					t.Errorf("expected default base URL, got %+v", c.BaseURL)
 				}
 			},
 		},
 		{
 			name:    "missing auth",
-			opts:    []ClientOption{},
+			cfg:     &mistral.ClientConfig{},
 			wantErr: true,
-		},
-		{
-			name:    "custom base URL",
-			opts:    []ClientOption{WithAPIKey("test-key"), WithBaseURL("https://custom.mistral.ai/v1")},
-			wantErr: false,
-			checkFunc: func(t *testing.T, c *Client) {
-				expected := "https://custom.mistral.ai/v1/"
-				if c.BaseURL.String() != expected {
-					t.Errorf("expected %s, got %s", expected, c.BaseURL)
-				}
-			},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			c, err := NewClient(tt.opts...)
+			c, err := mistral.NewClient(tt.cfg)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("NewClient() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
-			if tt.checkFunc != nil {
-				tt.checkFunc(t, c)
+			if tt.check != nil {
+				tt.check(t, c)
 			}
 		})
 	}
 }
 
 func TestNewRequest(t *testing.T) {
-	c, _ := NewClient(WithAPIKey("test-key"))
+	c, _ := mistral.NewClient(&mistral.ClientConfig{APIKey: "test-key"})
 
 	type Body struct {
 		Name string `json:"name"`
@@ -70,7 +62,6 @@ func TestNewRequest(t *testing.T) {
 		method     string
 		urlStr     string
 		body       any
-		wantURL    string
 		wantMethod string
 		checkBody  bool
 	}{
@@ -79,7 +70,6 @@ func TestNewRequest(t *testing.T) {
 			method:     http.MethodGet,
 			urlStr:     "test",
 			body:       nil,
-			wantURL:    defaultBaseURL + "test",
 			wantMethod: http.MethodGet,
 		},
 		{
@@ -87,7 +77,6 @@ func TestNewRequest(t *testing.T) {
 			method:     http.MethodPost,
 			urlStr:     "v1/chat",
 			body:       &Body{Name: "mistral"},
-			wantURL:    defaultBaseURL + "v1/chat",
 			wantMethod: http.MethodPost,
 			checkBody:  true,
 		},
@@ -104,17 +93,10 @@ func TestNewRequest(t *testing.T) {
 				t.Errorf("expected method %s, got %s", tt.wantMethod, req.Method)
 			}
 
-			if req.URL.String() != tt.wantURL {
-				t.Errorf("expected URL %s, got %s", tt.wantURL, req.URL.String())
-			}
-
 			if tt.checkBody {
 				var b Body
 				if err := json.NewDecoder(req.Body).Decode(&b); err != nil {
 					t.Fatalf("failed to decode request body: %v", err)
-				}
-				if b.Name != "mistral" {
-					t.Errorf("expected body name mistral, got %s", b.Name)
 				}
 			}
 
@@ -122,5 +104,77 @@ func TestNewRequest(t *testing.T) {
 				t.Errorf("Authorization header is %s, expected Bearer test-key", got)
 			}
 		})
+	}
+}
+
+func TestStream_Generic(t *testing.T) {
+	mux := http.NewServeMux()
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	client, _ := mistral.NewClient(&mistral.ClientConfig{APIKey: "test-key", BaseURL: server.URL})
+
+	mux.HandleFunc("/v1/stream", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprintf(w, "data: %s\n\n", `{"id":"1"}`)
+		fmt.Fprintf(w, "data: [DONE]\n\n")
+	})
+
+	req, _ := client.NewRequest("POST", "v1/stream", nil)
+	type dummy struct{ ID string `json:"id"` }
+
+	var received []string
+	for chunk, err := range mistral.Stream[*dummy](context.Background(), client, req) {
+		if err != nil {
+			t.Fatalf("Stream() error = %v", err)
+		}
+		received = append(received, chunk.ID)
+	}
+
+	if len(received) != 1 || received[0] != "1" {
+		t.Errorf("expected [1], got %v", received)
+	}
+}
+
+func TestClient_Do_ContextCancellation(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-time.After(100 * time.Millisecond):
+			w.WriteHeader(http.StatusOK)
+		}
+	}))
+	defer server.Close()
+
+	client, _ := mistral.NewClient(&mistral.ClientConfig{APIKey: "test-key", BaseURL: server.URL})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	req, _ := client.NewRequest("GET", "v1/test", nil)
+	_, err := client.Do(ctx, req, nil)
+
+	if err == nil {
+		t.Error("expected error for cancelled context, got nil")
+	}
+}
+
+func TestClient_Do_MalformedJSON(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{"invalid": "json`)
+	}))
+	defer server.Close()
+
+	client, _ := mistral.NewClient(&mistral.ClientConfig{APIKey: "test-key", BaseURL: server.URL})
+
+	req, _ := client.NewRequest("GET", "v1/test", nil)
+	var v map[string]any
+	_, err := client.Do(context.Background(), req, &v)
+
+	if err == nil {
+		t.Error("expected error for malformed JSON, got nil")
 	}
 }

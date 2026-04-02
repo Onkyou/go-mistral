@@ -2,193 +2,21 @@ package mistral
 
 import (
 	"context"
+	"fmt"
+	"iter"
 	"net/http"
 )
 
-// ChatService provides access to chat completions related functions in the
+// --- ChatService ---
+
+// ChatService provides access to chat completion related functions in the
 // Mistral API.
-//
-// Mistral API docs: https://docs.mistral.ai/api/endpoint/chat
 type ChatService service
 
-type ResponseFormatType string
-
-const (
-	ResponseFormatTypeText       ResponseFormatType = "text"
-	ResponseFormatTypeJsonObject ResponseFormatType = "json_object"
-	ResponseFormatTypeJsonSchema ResponseFormatType = "json_schema"
-)
-
-// ResponseFormat represents the format of the response.
-type ResponseFormat struct {
-	Type       ResponseFormatType `json:"type"`
-	JsonSchema *JsonSchema        `json:"json_schema,omitempty"`
-}
-
-type JsonSchema struct {
-	Name             string         `json:"name"`
-	Description      string         `json:"description,omitempty"`
-	SchemaDefinition map[string]any `json:"schema_definition"`
-	Strict           bool           `json:"strict"`
-}
-
-// ChatCompletionRequest represents the request payload for the chat completion API.
-type ChatCompletionRequest struct {
-	// The frequency_penalty penalizes the repetition of words based on their frequency in the generated text. A higher frequency penalty discourages the model from repeating words that have already appeared frequently in the output, promoting diversity and reducing repetition.
-	FrequencyPenalty float64 `json:"frequency_penalty"`
-
-	// Guardrails are used to control the output of the model.
-	Guardrails *GuardrailConfig `json:"guardrail,omitempty"`
-
-	// The maximum number of tokens to generate in the completion. The token count of your prompt plus max_tokens cannot exceed the model's context length.
-	MaxTokens *int `json:"max_tokens,omitempty"`
-
-	// The prompt(s) to generate completions for, encoded as a list of dict with role and content.
-	Messages []ChatMessage `json:"messages"`
-
-	// A dictionary of metadata to attach to the request.
-	Metadata map[string]string `json:"metadata,omitempty"`
-
-	// ID of the model to use.
-	Model Model `json:"model"`
-
-	// Number of completions to return for each request, input tokens are only billed once.
-	N *int `json:"n,omitempty"`
-
-	// Whether to enable parallel function calling during tool use, when enabled the model can call multiple tools in parallel.
-	ParallelToolCalls *bool `json:"parallel_tool_calls,omitempty"`
-
-	// The presence_penalty determines how much the model penalizes the repetition of words or phrases. A higher presence penalty encourages the model to use a wider variety of words and phrases, making the output more diverse and creative.
-	PresencePenalty float64 `json:"presence_penalty"`
-
-	// The seed to use for random sampling. If set, different calls will generate deterministic results.
-	RandomSeed *int `json:"random_seed,omitempty"`
-
-	// Controls the reasoning effort level for reasoning models. "high" enables comprehensive reasoning traces, "none" disables reasoning effort.
-	ReasoningEffort *ReasoningEffort `json:"reasoning_effort,omitempty"`
-
-	// Specify the format that the model must output. By default it will use \{ "type": "text" \}. Setting to \{ "type": "json_object" \} enables JSON mode, which guarantees the message the model generates is in JSON. When using JSON mode you MUST also instruct the model to produce JSON yourself with a system or a user message. Setting to \{ "type": "json_schema" \} enables JSON schema mode, which guarantees the message the model generates is in JSON and follows the schema you provide.
-	ResponseFormat *ResponseFormat `json:"response_format,omitempty"`
-
-	// What sampling temperature to use, we recommend between 0.0 and 0.7. Higher values like 0.7 will make the output more random, while lower values like 0.2 will make it more focused and deterministic. We generally recommend altering this or top_p but not both. The default value varies depending on the model you are targeting. Call the /models endpoint to retrieve the appropriate value.
-	Temperature *float64 `json:"temperature,omitempty"`
-
-	// Nucleus sampling, where the model considers the results of the tokens with top_p probability mass. So 0.1 means only the tokens comprising the top 10% probability mass are considered. We generally recommend altering this or temperature but not both.
-	TopP *float64 `json:"top_p,omitempty"`
-
-	// Whether to stream back partial progress. If set, tokens will be sent as data-only server-side events as they become available, with the stream terminated by a data: [DONE] message. Otherwise, the server will hold the request open until the timeout or until completion, with the response containing the full result as JSON.
-	Stream bool `json:"stream,omitempty"`
-
-	// Whether to inject a safety prompt before all conversations.
-	SafePrompt bool `json:"safe_prompt"`
-
-	// Stop generation if this token is detected. Or if one of these tokens is detected when providing an array
-	Stop []string `json:"stop,omitempty"`
-
-	// Controls which (if any) tool is called by the model. none means the model will not call any tool and instead generates a message. auto means the model can pick between generating a message or calling one or more tools. any or required means the model must call one or more tools. Specifying a particular tool forces the model to call that tool.
-	ToolChoice ToolChoice `json:"tool_choice,omitempty"`
-
-	// A list of tools the model may call.
-	Tools []Tool `json:"tools,omitempty"`
-}
-
-// ChatCompletionResponse wraps the chat completion response.
-type ChatCompletionResponse struct {
-	Choices []ChatCompletionChoice `json:"choices"`
-	Created int                    `json:"created"`
-	ID      string                 `json:"id"`
-	Model   Model                  `json:"model"`
-	Object  string                 `json:"object"`
-	Usage   UsageInfo              `json:"usage"`
-}
-
-type FinishReason string
-
-const (
-	FinishReasonStop        FinishReason = "stop"
-	FinishReasonLength      FinishReason = "length"
-	FinishReasonModelLength FinishReason = "model_length"
-	FinishReasonError       FinishReason = "error"
-	FinishReasonToolCalls   FinishReason = "tool_calls"
-)
-
-// ChatCompletionChoice represents a single completion choice.
-type ChatCompletionChoice struct {
-	Index   int          `json:"index"`
-	Message *ChatMessage `json:"message,omitempty"`
-
-	// Delta can be used by consumers to get the partial results in a streaming completion.
-	Delta        *ChatMessage `json:"delta,omitempty"`
-	FinishReason FinishReason `json:"finish_reason"`
-}
-
-// ChatCompletionRequestOption is a functional option for ChatCompletionRequest.
-type ChatCompletionRequestOption func(*ChatCompletionRequest)
-
-// WithTemperature sets the temperature for the request.
-func WithTemperature(t float64) ChatCompletionRequestOption {
-	return func(r *ChatCompletionRequest) {
-		r.Temperature = new(t)
-	}
-}
-
-// WithMaxTokens sets the maximum number of tokens for the request.
-func WithMaxTokens(m int) ChatCompletionRequestOption {
-	return func(r *ChatCompletionRequest) {
-		r.MaxTokens = new(m)
-	}
-}
-
-// WithTopP sets the top_p for the request.
-func WithTopP(p float64) ChatCompletionRequestOption {
-	return func(r *ChatCompletionRequest) {
-		r.TopP = new(p)
-	}
-}
-
-// WithSafePrompt sets the safe_prompt flag for the request.
-func WithSafePrompt(s bool) ChatCompletionRequestOption {
-	return func(r *ChatCompletionRequest) {
-		r.SafePrompt = s
-	}
-}
-
-// WithRandomSeed sets the random_seed for the request.
-func WithRandomSeed(s int) ChatCompletionRequestOption {
-	return func(r *ChatCompletionRequest) {
-		r.RandomSeed = new(s)
-	}
-}
-
-// WithTools sets the tools for the request.
-func WithTools(tools []Tool) ChatCompletionRequestOption {
-	return func(r *ChatCompletionRequest) {
-		r.Tools = tools
-	}
-}
-
-// WithToolChoice sets the tool_choice for the request.
-func WithToolChoice(choice ToolChoice) ChatCompletionRequestOption {
-	return func(r *ChatCompletionRequest) {
-		r.ToolChoice = choice
-	}
-}
-
-// WithResponseFormat sets the response_format for the request.
-func WithResponseFormat(format ResponseFormat) ChatCompletionRequestOption {
-	return func(r *ChatCompletionRequest) {
-		r.ResponseFormat = &format
-	}
-}
-
 // Complete creates a chat completion.
-func (svc *ChatService) Complete(ctx context.Context, model Model, messages []ChatMessage, opts ...ChatCompletionRequestOption) (*ChatCompletionResponse, *Response, error) {
-	req := &ChatCompletionRequest{
-		Model:    model,
-		Messages: messages,
-	}
-	for _, opt := range opts {
-		opt(req)
+func (svc *ChatService) Complete(ctx context.Context, req *ChatCompletionRequest) (*ChatCompletionResponse, *Response, error) {
+	if err := req.Validate(); err != nil {
+		return nil, nil, err
 	}
 
 	uri := "v1/chat/completions"
@@ -206,28 +34,256 @@ func (svc *ChatService) Complete(ctx context.Context, model Model, messages []Ch
 	return &resp, r, nil
 }
 
-// Stream creates a streaming chat completion. It returns two channels:
-// one for completion chunks and one for error signaling.
-func (svc *ChatService) Stream(ctx context.Context, model Model, messages []ChatMessage, opts ...ChatCompletionRequestOption) (<-chan *ChatCompletionResponse, <-chan error) {
-	req := &ChatCompletionRequest{
-		Model:    model,
-		Messages: messages,
-		Stream:   true,
-	}
-	for _, opt := range opts {
-		opt(req)
-	}
+// Stream creates a streaming chat completion. It returns an iterator for
+// completion chunks and error signaling.
+func (svc *ChatService) Stream(ctx context.Context, req *ChatCompletionRequest) iter.Seq2[*ChatCompletionResponse, error] {
+	return func(yield func(*ChatCompletionResponse, error) bool) {
+		req.Stream = true
+		if err := req.Validate(); err != nil {
+			yield(nil, err)
+			return
+		}
 
-	uri := "v1/chat/completions"
-	httpReq, err := svc.client.NewRequest(http.MethodPost, uri, req)
-	if err != nil {
-		dataChan := make(chan *ChatCompletionResponse)
-		errChan := make(chan error, 1)
-		close(dataChan)
-		errChan <- err
-		close(errChan)
-		return dataChan, errChan
-	}
+		uri := "v1/chat/completions"
+		httpReq, err := svc.client.NewRequest(http.MethodPost, uri, req)
+		if err != nil {
+			yield(nil, err)
+			return
+		}
 
-	return Stream[*ChatCompletionResponse](ctx, svc.client, httpReq)
+		for chunk, err := range Stream[*ChatCompletionResponse](ctx, svc.client, httpReq) {
+			if !yield(chunk, err) {
+				return
+			}
+		}
+	}
 }
+
+// --- Request/Response Models ---
+
+// ChatCompletionRequest represents a request for a chat completion.
+type ChatCompletionRequest struct {
+	Model    Model         `json:"model"`
+	Messages []*ChatMessage `json:"messages"`
+
+	// Temperature specifies the sampling temperature.
+	// Range: [0, 1]
+	Temperature *float64 `json:"temperature,omitempty"`
+
+	// TopP specifies the nucleus sampling probability.
+	// Range: [0, 1]
+	TopP *float64 `json:"top_p,omitempty"`
+
+	// MaxTokens specifies the maximum number of tokens to generate.
+	MaxTokens *int `json:"max_tokens,omitempty"`
+
+	// Stream specifies whether to stream the response.
+	Stream bool `json:"stream,omitempty"`
+
+	// Stop specifies up to 4 stop sequences.
+	Stop any `json:"stop,omitempty"`
+
+	// RandomSeed specifies a seed for deterministic generation.
+	RandomSeed *int `json:"random_seed,omitempty"`
+
+	// ResponseFormat specifies the format of the response.
+	ResponseFormat *ResponseFormat `json:"response_format,omitempty"`
+
+	// Tools specifies a list of tools the model may call.
+	Tools []Tool `json:"tools,omitempty"`
+
+	// ToolChoice specifies the tool selection strategy.
+	ToolChoice ToolChoice `json:"tool_choice,omitempty"`
+
+	// PresencePenalty specifies the presence penalty.
+	// Range: [-2, 2]
+	PresencePenalty *float64 `json:"presence_penalty,omitempty"`
+
+	// FrequencyPenalty specifies the frequency penalty.
+	// Range: [-2, 2]
+	FrequencyPenalty *float64 `json:"frequency_penalty,omitempty"`
+
+	// N specifies the number of completions to generate.
+	N *int `json:"n,omitempty"`
+
+	// Prediction specifies the prediction configuration. (Alpha)
+	Prediction any `json:"prediction,omitempty"`
+
+	// SafePrompt specifies whether to use a safe prompt.
+	SafePrompt bool `json:"safe_prompt,omitempty"`
+
+	// Guardrails specifies the guardrail configuration.
+	Guardrails *GuardrailConfig `json:"guardrails,omitempty"`
+
+	// ReasoningEffort specifies the reasoning effort.
+	ReasoningEffort *ReasoningEffort `json:"reasoning_effort,omitempty"`
+}
+
+func (r *ChatCompletionRequest) Validate() error {
+	if r == nil {
+		return fmt.Errorf("chat completion request is nil")
+	}
+
+	if err := r.Model.Validate(); err != nil {
+		return err
+	}
+
+	if len(r.Messages) == 0 {
+		return fmt.Errorf("messages are required")
+	}
+
+	for i := range r.Messages {
+		if err := r.Messages[i].Validate(); err != nil {
+			return fmt.Errorf("invalid message at index %d: %w", i, err)
+		}
+	}
+
+	if r.Temperature != nil && (*r.Temperature < 0 || *r.Temperature > 1) {
+		return fmt.Errorf("temperature must be between 0 and 1, got %f", *r.Temperature)
+	}
+
+	if r.TopP != nil && (*r.TopP < 0 || *r.TopP > 1) {
+		return fmt.Errorf("top_p must be between 0 and 1, got %f", *r.TopP)
+	}
+
+	if r.PresencePenalty != nil && (*r.PresencePenalty < -2 || *r.PresencePenalty > 2) {
+		return fmt.Errorf("presence_penalty must be between -2 and 2, got %f", *r.PresencePenalty)
+	}
+
+	if r.FrequencyPenalty != nil && (*r.FrequencyPenalty < -2 || *r.FrequencyPenalty > 2) {
+		return fmt.Errorf("frequency_penalty must be between -2 and 2, got %f", *r.FrequencyPenalty)
+	}
+
+	if r.MaxTokens != nil && *r.MaxTokens <= 0 {
+		return fmt.Errorf("max_tokens must be greater than 0")
+	}
+
+	if r.N != nil && *r.N <= 0 {
+		return fmt.Errorf("n must be greater than 0")
+	}
+
+	if r.ResponseFormat != nil {
+		if err := r.ResponseFormat.Validate(); err != nil {
+			return fmt.Errorf("invalid response_format: %w", err)
+		}
+	}
+
+	if r.ToolChoice != "" {
+		if err := r.ToolChoice.Validate(); err != nil {
+			return fmt.Errorf("invalid tool_choice: %w", err)
+		}
+	}
+
+	for i, tool := range r.Tools {
+		if err := tool.Validate(); err != nil {
+			return fmt.Errorf("invalid tool at index %d: %w", i, err)
+		}
+	}
+
+	if r.Guardrails != nil {
+		if err := r.Guardrails.Validate(); err != nil {
+			return fmt.Errorf("invalid guardrails: %w", err)
+		}
+	}
+
+	if r.ReasoningEffort != nil {
+		if err := r.ReasoningEffort.Validate(); err != nil {
+			return fmt.Errorf("invalid reasoning_effort: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// ChatCompletionResponse wraps the chat completion response.
+type ChatCompletionResponse struct {
+	Choices []ChatCompletionChoice `json:"choices"`
+	Created int                    `json:"created"`
+	ID      string                 `json:"id"`
+	Model   Model                  `json:"model"`
+	Object  string                 `json:"object"`
+	Usage   UsageInfo              `json:"usage"`
+}
+
+// ChatCompletionChoice represents a single completion choice.
+type ChatCompletionChoice struct {
+	Index   int          `json:"index"`
+	Message *ChatMessage `json:"message,omitempty"`
+
+	// Delta can be used by consumers to get the partial results in a streaming completion.
+	Delta        *ChatMessage `json:"delta,omitempty"`
+	FinishReason FinishReason `json:"finish_reason"`
+}
+
+type ResponseFormatType string
+
+const (
+	ResponseFormatTypeText       ResponseFormatType = "text"
+	ResponseFormatTypeJsonObject ResponseFormatType = "json_object"
+	ResponseFormatTypeJsonSchema ResponseFormatType = "json_schema"
+)
+
+func (rft *ResponseFormatType) Validate() error {
+	if rft == nil {
+		return fmt.Errorf("response format type is nil")
+	}
+	switch *rft {
+	case ResponseFormatTypeText, ResponseFormatTypeJsonObject, ResponseFormatTypeJsonSchema:
+		return nil
+	default:
+		return fmt.Errorf("invalid response format type: %s", *rft)
+	}
+}
+
+// ResponseFormat specifies the format of the response.
+type ResponseFormat struct {
+	Type       ResponseFormatType `json:"type"`
+	JsonSchema *JsonSchema        `json:"json_schema,omitempty"`
+}
+
+func (rf *ResponseFormat) Validate() error {
+	if rf == nil {
+		return fmt.Errorf("response format is nil")
+	}
+	if err := rf.Type.Validate(); err != nil {
+		return err
+	}
+	if rf.Type == ResponseFormatTypeJsonSchema {
+		if rf.JsonSchema == nil {
+			return fmt.Errorf("json_schema is required for type json_schema")
+		}
+		return rf.JsonSchema.Validate()
+	}
+	return nil
+}
+
+// JsonSchema represents a JSON Schema.
+type JsonSchema struct {
+	Name             string         `json:"name"`
+	Description      string         `json:"description,omitempty"`
+	SchemaDefinition map[string]any `json:"schema"`
+	Strict           bool           `json:"strict,omitempty"`
+}
+
+func (js *JsonSchema) Validate() error {
+	if js == nil {
+		return fmt.Errorf("json schema is nil")
+	}
+	if js.Name == "" {
+		return fmt.Errorf("json schema name is required")
+	}
+	if js.SchemaDefinition == nil {
+		return fmt.Errorf("json schema definition is required")
+	}
+	return nil
+}
+
+type FinishReason string
+
+const (
+	FinishReasonStop        FinishReason = "stop"
+	FinishReasonLength      FinishReason = "length"
+	FinishReasonModelLength FinishReason = "model_length"
+	FinishReasonError       FinishReason = "error"
+	FinishReasonToolCalls   FinishReason = "tool_calls"
+)

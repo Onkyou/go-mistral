@@ -8,15 +8,18 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"iter"
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 )
 
 const (
 	Version          = "1.0.0"
 	defaultBaseURL   = "https://api.mistral.ai/"
 	defaultUserAgent = "go-mistral/" + Version
+	defaultTimeOut   = 5 * time.Minute
 )
 
 // Client manages communication with the Mistral API.
@@ -27,76 +30,91 @@ type Client struct {
 	apiKey    string
 
 	// Services
-	Chat      *ChatService
-	Embedding *EmbeddingService
+	Chat        *ChatService
+	Embedding   *EmbeddingService
+	Classifiers *ClassifiersService
 }
 
 type service struct {
 	client *Client
 }
 
-// Option is a functional option for configuring the Client.
-type ClientOption func(*Client) error
+// ClientConfig is used to configure the Mistral API client.
+type ClientConfig struct {
+	// APIKey is the Mistral API key.
+	APIKey string
 
-// NewClient returns a new Mistral API client.
-func NewClient(opts ...ClientOption) (*Client, error) {
-	baseURL, _ := url.Parse(defaultBaseURL)
-	c := &Client{
-		client:    &http.Client{},
-		BaseURL:   baseURL,
-		UserAgent: defaultUserAgent,
+	// BaseURL is the base URL for the Mistral API.
+	// Defaults to https://api.mistral.ai/
+	BaseURL string
+
+	// HTTPClient is the HTTP client used to make requests.
+	// Defaults to a new http.Client.
+	HTTPClient *http.Client
+
+	// UserAgent is the User-Agent header sent with requests.
+	// Defaults to go-mistral/VERSION.
+	UserAgent string
+}
+
+func (cfg *ClientConfig) Validate() error {
+	if cfg == nil {
+		return fmt.Errorf("mistral: config is nil")
 	}
 
-	for _, opt := range opts {
-		if err := opt(c); err != nil {
-			return nil, err
+	if cfg.APIKey == "" && (cfg.HTTPClient == nil || (cfg.HTTPClient != nil && cfg.HTTPClient.Transport == nil)) {
+		return errors.New("cannot create client, no authentication has been provided")
+	}
+
+	return nil
+}
+
+func (cfg *ClientConfig) initializeWithDefaults() {
+	if cfg.BaseURL == "" {
+		cfg.BaseURL = defaultBaseURL
+	}
+	if !strings.HasSuffix(cfg.BaseURL, "/") {
+		cfg.BaseURL += "/"
+	}
+	if cfg.HTTPClient == nil {
+		cfg.HTTPClient = &http.Client{
+			Timeout: defaultTimeOut,
 		}
 	}
+	if cfg.UserAgent == "" {
+		cfg.UserAgent = defaultUserAgent
+	}
+}
 
-	// Validate that at least an API key is provided
-	// (Unless a custom transport is used that handles auth)
-	if c.apiKey == "" && c.client.Transport == nil {
-		return nil, errors.New("cannot create client, no authentication has been provided")
+// NewClient returns a new Mistral API client using the provided configuration.
+func NewClient(cfg *ClientConfig) (*Client, error) {
+	if cfg == nil {
+		cfg = &ClientConfig{}
+	}
+
+	cfg.initializeWithDefaults()
+
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+
+	u, err := url.Parse(cfg.BaseURL)
+	if err != nil {
+		return nil, fmt.Errorf("mistral: invalid base URL: %w", err)
+	}
+
+	c := &Client{
+		client:    cfg.HTTPClient,
+		BaseURL:   u,
+		UserAgent: cfg.UserAgent,
+		apiKey:    cfg.APIKey,
 	}
 
 	c.Chat = &ChatService{client: c}
 	c.Embedding = &EmbeddingService{client: c}
+	c.Classifiers = &ClassifiersService{client: c}
 
 	return c, nil
-}
-
-// WithAPIKey sets the API key for the client.
-func WithAPIKey(key string) ClientOption {
-	return func(c *Client) error {
-		c.apiKey = key
-		return nil
-	}
-}
-
-// WithBaseURL sets the base URL for the client.
-func WithBaseURL(base string) ClientOption {
-	return func(c *Client) error {
-		if !strings.HasSuffix(base, "/") {
-			base += "/"
-		}
-		u, err := url.Parse(base)
-		if err != nil {
-			return err
-		}
-		c.BaseURL = u
-		return nil
-	}
-}
-
-// WithHTTPClient sets a custom HTTP client.
-func WithHTTPClient(client *http.Client) ClientOption {
-	return func(c *Client) error {
-		if client == nil {
-			return errors.New("mistral: http client is nil")
-		}
-		c.client = client
-		return nil
-	}
 }
 
 // NewRequest creates an API request. A relative URL can be provided in urlStr,
@@ -177,25 +195,21 @@ func (c *Client) Do(ctx context.Context, req *http.Request, v any) (*Response, e
 	return response, err
 }
 
-// Stream performs a streaming API request and returns two channels for data and errors.
-func Stream[T any](ctx context.Context, c *Client, req *http.Request) (<-chan T, <-chan error) {
-	dataChan := make(chan T)
-	errChan := make(chan error, 1)
-
-	go func() {
-		defer close(dataChan)
-		defer close(errChan)
-
+// Stream performs a streaming API request and returns an iterator for data and errors.
+func Stream[T any](ctx context.Context, c *Client, req *http.Request) iter.Seq2[T, error] {
+	return func(yield func(T, error) bool) {
 		req = req.WithContext(ctx)
 		resp, err := c.client.Do(req)
 		if err != nil {
-			errChan <- err
+			var zero T
+			yield(zero, err)
 			return
 		}
 		defer resp.Body.Close()
 
 		if err := CheckResponse(resp); err != nil {
-			errChan <- err
+			var zero T
+			yield(zero, err)
 			return
 		}
 
@@ -204,7 +218,8 @@ func Stream[T any](ctx context.Context, c *Client, req *http.Request) (<-chan T,
 			line, err := reader.ReadString('\n')
 			if err != nil {
 				if err != io.EOF {
-					errChan <- err
+					var zero T
+					yield(zero, err)
 				}
 				return
 			}
@@ -225,52 +240,24 @@ func Stream[T any](ctx context.Context, c *Client, req *http.Request) (<-chan T,
 
 			var chunk T
 			if err := json.Unmarshal([]byte(data), &chunk); err != nil {
-				errChan <- err
+				var zero T
+				yield(zero, err)
+				return
+			}
+
+			if !yield(chunk, nil) {
 				return
 			}
 
 			select {
 			case <-ctx.Done():
-				errChan <- ctx.Err()
+				var zero T
+				yield(zero, ctx.Err())
 				return
-			case dataChan <- chunk:
+			default:
 			}
 		}
-	}()
-
-	return dataChan, errChan
-}
-
-// APIError represents an error returned by the Mistral API.
-type APIError struct {
-	HTTPStatusCode int
-	Message        string  `json:"message"`
-	Type           string  `json:"type"`
-	Param          *string `json:"param"`
-	Code           *string `json:"code"`
-	RawBody        []byte  `json:"-"`
-}
-
-func (e *APIError) Error() string {
-	msg := e.Message
-	if msg == "" && len(e.RawBody) > 0 {
-		msg = string(e.RawBody)
 	}
-	return fmt.Sprintf("mistral: API error (status=%d): %s", e.HTTPStatusCode, msg)
 }
 
-// CheckResponse checks the API response for errors, and returns them if present.
-func CheckResponse(r *http.Response) error {
-	if c := r.StatusCode; 200 <= c && c <= 299 {
-		return nil
-	}
 
-	apiErr := &APIError{HTTPStatusCode: r.StatusCode}
-	data, err := io.ReadAll(r.Body)
-	if err == nil && len(data) > 0 {
-		apiErr.RawBody = data
-		json.Unmarshal(data, apiErr)
-	}
-
-	return apiErr
-}

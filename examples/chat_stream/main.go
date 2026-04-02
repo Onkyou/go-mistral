@@ -15,28 +15,30 @@ func main() {
 		log.Fatal("MISTRAL_API_KEY environment variable is not set")
 	}
 
-	client, err := mistral.NewClient(mistral.WithAPIKey(apiKey))
+	client, err := mistral.NewClient(&mistral.ClientConfig{APIKey: apiKey})
 	if err != nil {
 		log.Fatalf("Failed to create client: %v", err)
 	}
 
 	ctx := context.Background()
-	messages := []mistral.ChatMessage{
-		{Role: mistral.RoleUser, Content: "Moin! How would a seagull muse about Hamburg?"},
+	messages := []*mistral.ChatMessage{
+		{Role: mistral.ChatMessageRoleUser, Content: "Moin! How would a seagull muse about Hamburg?"},
 	}
 	model := mistral.ModelMistralLargeLatest
 
-	dataChan, errChan := client.Chat.Stream(ctx, model, messages, mistral.WithTemperature(0.7))
-
 	fmt.Print("Assistant: ")
-	for chunk := range dataChan {
+	req := &mistral.ChatCompletionRequest{
+		Model:       model,
+		Messages:    messages,
+		Temperature: func() *float64 { f := 0.7; return &f }(),
+	}
+	for chunk, err := range client.Chat.Stream(ctx, req) {
+		if err != nil {
+			log.Fatalf("\nError in stream: %v", err)
+		}
 		if len(chunk.Choices) > 0 && chunk.Choices[0].Delta != nil {
 			fmt.Print(chunk.Choices[0].Delta.Content)
 		}
-	}
-
-	if err := <-errChan; err != nil {
-		log.Fatalf("\nError in stream: %v", err)
 	}
 	fmt.Println()
 }

@@ -15,7 +15,7 @@ func main() {
 		log.Fatal("MISTRAL_API_KEY environment variable is not set")
 	}
 
-	client, err := mistral.NewClient(mistral.WithAPIKey(apiKey))
+	client, err := mistral.NewClient(&mistral.ClientConfig{APIKey: apiKey})
 	if err != nil {
 		log.Fatalf("Failed to create client: %v", err)
 	}
@@ -24,7 +24,10 @@ func main() {
 	input := "Embed this sentence."
 	model := mistral.ModelMistralEmbed
 
-	resp, _, err := client.Embedding.Create(ctx, model, []string{input})
+	resp, _, err := client.Embedding.Create(ctx, &mistral.EmbeddingRequest{
+		Model: model,
+		Input: []string{input},
+	})
 	if err != nil {
 		log.Fatalf("Failed to create embedding: %v", err)
 	}

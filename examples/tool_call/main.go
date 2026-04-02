@@ -16,7 +16,7 @@ func main() {
 		log.Fatal("MISTRAL_API_KEY environment variable is not set")
 	}
 
-	client, err := mistral.NewClient(mistral.WithAPIKey(apiKey))
+	client, err := mistral.NewClient(&mistral.ClientConfig{APIKey: apiKey})
 	if err != nil {
 		log.Fatalf("Failed to create client: %v", err)
 	}
@@ -39,26 +39,25 @@ func main() {
 	}
 
 	// 2. Initial request to the model
-	messages := []mistral.ChatMessage{
+	messages := []*mistral.ChatMessage{
 		mistral.NewUserMessage("Generate a random number between 1 and 100, and then write a four-line haiku about that number."),
 	}
 
 	model := mistral.ModelMistralLargeLatest
 
 	fmt.Println("Requesting completion with tool...")
-	resp, _, err := client.Chat.Complete(
-		ctx,
-		model,
-		messages,
-		mistral.WithTools(tools),
-		mistral.WithToolChoice(mistral.ToolChoiceAuto),
-	)
+	resp, _, err := client.Chat.Complete(ctx, &mistral.ChatCompletionRequest{
+		Model:      model,
+		Messages:   messages,
+		Tools:      tools,
+		ToolChoice: mistral.ToolChoiceAuto,
+	})
 	if err != nil {
 		log.Fatalf("Failed to complete chat: %v", err)
 	}
 
 	assistantMsg := resp.Choices[0].Message
-	messages = append(messages, *assistantMsg)
+	messages = append(messages, assistantMsg)
 
 	// 3. Check for tool calls
 	if len(assistantMsg.ToolCalls) > 0 {
@@ -82,7 +81,10 @@ func main() {
 
 		// 4. Send the tool result back to the model for the final haiku
 		fmt.Println("Sending tool result back to model...")
-		resp, _, err = client.Chat.Complete(ctx, model, messages)
+		resp, _, err = client.Chat.Complete(ctx, &mistral.ChatCompletionRequest{
+			Model:    model,
+			Messages: messages,
+		})
 		if err != nil {
 			log.Fatalf("Failed to get final response: %v", err)
 		}
